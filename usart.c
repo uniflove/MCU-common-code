@@ -38,6 +38,7 @@
 #include <asf.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #endif //_____region_____ // includes //////////////////////////
 
@@ -50,6 +51,10 @@
 #define USART_BUFFER_SIZE			64		// use buffer size one of 32, 64, 128, 256
 #define USART_BUFFER_MASK			0x3f	// define buffer counter mask depends on the size
 
+#define USART_RX_CHAR_ENTER			0x0d
+
+#define USART_CLI_CMD_NUMB			2
+
 struct _usart_fifo {
 	uint8_t txBuffer[USART_BUFFER_SIZE];
 	uint8_t rxBuffer[USART_BUFFER_SIZE];
@@ -57,8 +62,22 @@ struct _usart_fifo {
 	uint8_t txWritePos;
 	uint8_t rxReadPos;
 	uint8_t rxWritePos;
-	} usart_t;
+	uint8_t rxEnterPos;
+} usart_t;
 
+// callback functions for CLI commands
+void abcFunc(void);
+void bbcFunc(void);
+
+struct _cmd_list {
+	char cmd[10];
+	void(*cmdFunction)(void);
+};
+
+// CLI command list
+struct _cmd_list cmdList[USART_CLI_CMD_NUMB] = {
+	{"abc", abcFunc}, {"bbc", bbcFunc}
+};
 
 void usart_put_string(const char *str);
 
@@ -80,7 +99,6 @@ int main (void)
 		.stopbits = USART_SERIAL_STOP_BIT
 	};
 	
-	//sysclk_enable_module((SYSCLK_PORT_D, PR_USART0_bm));
 	usart_init_rs232(USART_SERIAL, & usartOptions);
 	usart_set_rx_interrupt_level(USART_SERIAL, USART_INT_LVL_LO);
 	
@@ -90,7 +108,30 @@ int main (void)
 	sprintf(buf, "Value is : %d\r\n", temp);
 	usart_put_string(buf);
 	
-	while(1);
+	while(1) {
+		if(usart_t.rxEnterPos) {
+			// copy CLI command from rx buffer
+			uint16_t cmdLength = USART_BUFFER_SIZE - usart_t.rxReadPos + usart_t.rxEnterPos + 1;
+			if(usart_t.rxEnterPos > usart_t.rxReadPos) {
+				cmdLength -= USART_BUFFER_SIZE;
+			}
+			char cmdString[cmdLength];
+			for(uint8_t i = 0; i < cmdLength; i++) {
+				cmdString[i] = usart_t.rxBuffer[usart_t.rxReadPos++];
+				usart_t.rxReadPos &= USART_BUFFER_MASK;
+			}
+			cmdString[cmdLength -1] = 0;
+			
+			// compare command and execute
+			for(int i = 0; i<USART_CLI_CMD_NUMB; i++) {
+				if(strcmp(cmdString, cmdList[i].cmd) == 0) {
+					cmdList[i].cmdFunction();
+					break;
+				}
+			}
+			usart_t.rxEnterPos = 0;
+		}
+	}
 }
 
 void usart_put_string(const char *str) {
@@ -98,6 +139,7 @@ void usart_put_string(const char *str) {
 	
 	for( ; strLength > 0; strLength--) {
 		usart_t.txBuffer[usart_t.txWritePos++] = *str++;
+		usart_t.txWritePos &= USART_BUFFER_MASK;
 	}
 	usart_set_dre_interrupt_level(USART_SERIAL, USART_INT_LVL_LO);
 }
@@ -113,5 +155,18 @@ ISR(USARTD0_DRE_vect) {
 }
 
 ISR(USARTD0_RXC_vect) {
-	usart_t.rxBuffer[usart_t.rxWritePos++] = usart_getchar(USART_SERIAL);
+	uint8_t rxChar = usart_getchar(USART_SERIAL);
+	if(rxChar == USART_RX_CHAR_ENTER) {
+		usart_t.rxEnterPos = usart_t.rxWritePos;
+	}
+	usart_t.rxBuffer[usart_t.rxWritePos++] = rxChar;
+	usart_t.rxWritePos &= USART_BUFFER_MASK;
+}
+
+void abcFunc(void) {
+	usart_put_string("CLI test ok...\r\n");
+}
+
+void bbcFunc(void ) {
+	usart_put_string("bbc is good for English...\r\n");
 }
